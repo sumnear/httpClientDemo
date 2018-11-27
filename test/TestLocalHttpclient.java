@@ -29,9 +29,10 @@ public class TestLocalHttpclient
     @Test
     public void doGet()
     {
-        String url = "http://www.baidu.com/s";
+        String url = "http://dcs.yozosoft.com/convert";
         Map<String, String> params = new HashMap<>();
-        params.put("wd", "文档预览");
+        params.put("convertType", "1");
+        params.put("inputDir", "31a6cbe0-471c-4998-b7f7-05165faf80c1/1.jpg");
         IResult<String> result = httpclientService.doGet(url, params);
         System.out.println(result.isSuccess());
         System.out.println(result.getData());
