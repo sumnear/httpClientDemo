@@ -5,12 +5,15 @@ import com.sumnear.commons.DefaultResult;
 import com.sumnear.commons.IResult;
 import org.apache.http.*;
 import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.HttpRequestRetryHandler;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.methods.*;
+import org.apache.http.client.protocol.HttpClientContext;
 import org.apache.http.client.utils.URLEncodedUtils;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
+import org.apache.http.conn.ConnectTimeoutException;
 import org.apache.http.conn.HttpClientConnectionManager;
 import org.apache.http.conn.socket.ConnectionSocketFactory;
 import org.apache.http.conn.socket.PlainConnectionSocketFactory;
@@ -23,13 +26,14 @@ import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.protocol.HTTP;
+import org.apache.http.protocol.HttpContext;
 import org.apache.http.util.EntityUtils;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLHandshakeException;
+import java.io.*;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +46,7 @@ public class HttpclientService
     private static final int DEFAULT_CONNECT_REQUEST_TIMEOUT = 500;  //从连接池获取连接的超时时间
     private static final int DEFAULT_CONNECT_TIMEOUT = 500;   //tcp连接超时时间
     private static final int DEFAULT_SOCKET_TIMEOUT = 2000;  // 数据交互超时时间 tcp io的读写超时时间
+    private static final int DEFAULT_RETRY_COUNT = 2000;  // 数据交互超时时间 tcp io的读写超时时间
 
     /**
      * httpclient读取内容时使用的字符集
@@ -63,13 +68,17 @@ public class HttpclientService
     // tcp io的读写超时时间
     private final int socketTimeout;
 
+    private final int retryCount;
+
     private PoolingHttpClientConnectionManager httpPoolManager;      //http连接池管理
 
-//    private CloseableHttpClient httpClient;                       //httpclient
+    private CloseableHttpClient httpClient;                       //httpclient
 
     private RequestConfig requestConfig;
 
     private IdleConnectionMonitorThread idleThread;     //自动回收空闲连接
+
+    private HttpRequestRetryHandler httpRequestRetryHandler; //重试策略
 
     public HttpclientService()
     {
@@ -78,7 +87,8 @@ public class HttpclientService
                 HttpclientService.DEFAULT_POOL_MAX_PER_ROUTE,
                 HttpclientService.DEFAULT_CONNECT_TIMEOUT,
                 HttpclientService.DEFAULT_CONNECT_REQUEST_TIMEOUT,
-                HttpclientService.DEFAULT_SOCKET_TIMEOUT
+                HttpclientService.DEFAULT_SOCKET_TIMEOUT,
+                HttpclientService.DEFAULT_RETRY_COUNT
         );
     }
 
@@ -87,7 +97,8 @@ public class HttpclientService
             int maxPerRoute,
             int connectTimeout,
             int connectRequestTimeout,
-            int socketTimeout
+            int socketTimeout,
+            int retryCount
     )
     {
 
@@ -96,13 +107,16 @@ public class HttpclientService
         this.connectTimeout = connectTimeout;
         this.socketTimeout = socketTimeout;
         this.connectRequestTimeout = connectRequestTimeout;
+        this.retryCount = retryCount;
 
         //构建公用 PoolingHttpClientConnectionManager
         httpPoolManager = buildPoolingHttpClientConnectionManager(maxTotal, maxPerRoute);
         //构建公用RequestConfig
         requestConfig = buildRequestConfig(connectTimeout, socketTimeout, connectRequestTimeout);
+        //构建公用
+        httpRequestRetryHandler = buildHttpRequestRetryHandler(retryCount);
         //构建公用httpClient，默认为连接池模式
-//        httpClient = buildHttpClient(true, httpPoolManager, requestConfig);
+        httpClient = buildHttpClient(true, httpPoolManager, requestConfig,httpRequestRetryHandler);
         //启动清理线程
         idleThread = new IdleConnectionMonitorThread(this.httpPoolManager);
         idleThread.start();
@@ -112,7 +126,6 @@ public class HttpclientService
     {
         return this.doGet(url, Collections.EMPTY_MAP, Collections.EMPTY_MAP);
     }
-
     public IResult<String> doGet(String url, Map<String, String> params)
     {
         return this.doGet(url, params, Collections.EMPTY_MAP);
@@ -283,7 +296,6 @@ public class HttpclientService
     {
         //构建GET请求头
         HttpGet httpGet = buildHttpGet(url, params, headers);
-        CloseableHttpClient httpClient = buildHttpClient(true, httpPoolManager, requestConfig);
         //response要把流写到本地
         CloseableHttpResponse response = null;
         FileOutputStream fout = null;
@@ -294,12 +306,12 @@ public class HttpclientService
             in = entity.getContent();
             File file = new File(destFilePath);
             fout = new FileOutputStream(file);
-                int l = -1;
-                byte[] tmp = new byte[1024];
-                while ((l = in.read(tmp)) != -1) {
-                    // 注意这里如果用OutputStream.write(buff)的话，图片会失真
-                    fout.write(tmp, 0, l);
-                }
+            int l = -1;
+            byte[] tmp = new byte[1024];
+            while ((l = in.read(tmp)) != -1) {
+                // 注意这里如果用OutputStream.write(buff)的话，图片会失真
+                fout.write(tmp, 0, l);
+            }
             fout.flush();
             return DefaultResult.successResult("下载成功");
         } catch (Exception e) {
@@ -325,6 +337,8 @@ public class HttpclientService
         }
 
     }
+
+
 
 
     public void shutdown()
@@ -378,7 +392,6 @@ public class HttpclientService
      */
     private IResult<String> getResponseEntity(HttpUriRequest request, String charset)
     {
-        CloseableHttpClient httpClient = buildHttpClient(true, httpPoolManager, requestConfig);
         CloseableHttpResponse response = null;
         try {
             response = httpClient.execute(request);
@@ -415,12 +428,14 @@ public class HttpclientService
      * @return
      */
     private static CloseableHttpClient buildHttpClient(boolean isMultiThread,
-                                                       PoolingHttpClientConnectionManager httpPoolManager, RequestConfig requestConfig)
+                                                       PoolingHttpClientConnectionManager httpPoolManager,
+                                                       RequestConfig requestConfig,
+                                                       HttpRequestRetryHandler httpRequestRetryHandler)
     {
         CloseableHttpClient client;
         if (isMultiThread)
             client = HttpClients.custom().setConnectionManager(httpPoolManager)
-                    .setDefaultRequestConfig(requestConfig)
+                    .setDefaultRequestConfig(requestConfig).setRetryHandler(httpRequestRetryHandler)
                     .build();// HttpClientBuilder.create() == HttpClients.custom()
         else {
             client = HttpClients.custom().build();
@@ -516,6 +531,42 @@ public class HttpclientService
         return httpGet;
     }
 
+
+    public HttpRequestRetryHandler buildHttpRequestRetryHandler(int retryCount){
+        return  new HttpRequestRetryHandler() {
+            public boolean retryRequest(IOException exception, int executionCount, HttpContext context) {
+                if (executionCount >= retryCount) {// 如果已经重试了3次，就放弃
+                    return false;
+                }
+                if (exception instanceof NoHttpResponseException) {// 如果服务器丢掉了连接，那么就重试
+                    return true;
+                }
+                if (exception instanceof SSLHandshakeException) {// 不要重试SSL握手异常
+                    return false;
+                }
+                if (exception instanceof InterruptedIOException) {// 超时
+                    return true;
+                }
+                if (exception instanceof UnknownHostException) {// 目标服务器不可达
+                    return false;
+                }
+                if (exception instanceof ConnectTimeoutException) {// 连接被拒绝
+                    return false;
+                }
+                if (exception instanceof SSLException) {// ssl握手异常
+                    return false;
+                }
+                HttpClientContext clientContext = HttpClientContext.adapt(context);
+                HttpRequest request = clientContext.getRequest();
+                // 如果请求是幂等的，就再次尝试
+                if (!(request instanceof HttpEntityEnclosingRequest)) {
+                    return true;
+                }
+                return false;
+            }
+        };
+    }
+
     /**
      * 设置成消息体的长度 setting MessageBody length
      *
@@ -568,10 +619,10 @@ public class HttpclientService
 
         Map<String, String> params = new HashMap<>();
         params.put("wd", "sumnear");
-//        IResult<String> re = service.doGet(url,params);
-//        if(re.isSuccess()){
-//            System.out.println(re.getData());
-//        }
+        IResult<String> re = service.doGet(url,params);
+        if(re.isSuccess()){
+            System.out.println(re.getData());
+        }
         IResult<String> re2 = service.doPost(url, params);
         if (re2.isSuccess()) {
             System.out.println(re2.getData());

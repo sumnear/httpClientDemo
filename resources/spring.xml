@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans"
-       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
        xsi:schemaLocation="http://www.springframework.org/schema/beans
        http://www.springframework.org/schema/beans/spring-beans.xsd
        http://www.springframework.org/schema/context
@@ -9,14 +10,11 @@
 
     <!-- 引入配置文件 -->
     <context:property-placeholder location="classpath*:httpclientConfig.properties"
-                                  ignore-unresolvable="true" />
-
-
-
+                                  ignore-unresolvable="true"/>
 
     <!-- httpclient -->
     <!-- socketFactoryRegistry -->
-    <bean id="myHttpsRegistry" class="com.sumnear.service.spring.MyHttpsRegistry" />
+    <bean id="myHttpsRegistry" class="com.sumnear.service.spring.MyHttpsRegistry"/>
     <bean id="socketFactoryRegistry" class="org.apache.http.config.Registry"
           factory-bean="myHttpsRegistry" factory-method="getSocketFactoryRegistry">
     </bean>
@@ -33,30 +31,30 @@
         <constructor-arg type="org.apache.http.config.Registry"
                          ref="socketFactoryRegistry"></constructor-arg>
         <!-- 最大连接数 -->
-        <property name="maxTotal" value="${http.maxTotal}" />
+        <property name="maxTotal" value="${http.maxTotal}"/>
         <!--设置每个主机最大的并发数 -->
-        <property name="defaultMaxPerRoute" value="${http.defaultMaxPerRoute}" />
+        <property name="defaultMaxPerRoute" value="${http.defaultMaxPerRoute}"/>
     </bean>
 
     <!--定义HttpClient构建器 -->
     <bean id="httpClientBuilder" class="org.apache.http.impl.client.HttpClientBuilder"
           factory-method="create">
-        <property name="connectionManager" ref="connectionManager" />
-        <property name="retryHandler" ref="httpRequestRetryHandler" />
-        <property name="defaultRequestConfig" ref="requestConfig" />
+        <property name="connectionManager" ref="connectionManager"/>
+        <property name="retryHandler" ref="httpRequestRetryHandler"/>
+        <property name="defaultRequestConfig" ref="requestConfig"/>
 
     </bean>
-    <!--定义httpClient对象，该bean一定是多例的 -->
+    <!--定义httpClient对象 -->
     <bean id="httpClient" class="org.apache.http.impl.client.CloseableHttpClient"
-          factory-bean="httpClientBuilder" factory-method="build" scope="prototype"></bean>
+          factory-bean="httpClientBuilder" factory-method="build" ></bean>
     <!--定义requestConfig构建器 -->
     <bean id="requestConfigBuilder" class="org.apache.http.client.config.RequestConfig.Builder">
         <!--设置创建连接的最长时间 -->
-        <property name="connectTimeout" value="${http.connectTimeout}" />
+        <property name="connectTimeout" value="${http.connectTimeout}"/>
         <!--从连接池中获取到连接的最长时间 -->
-        <property name="connectionRequestTimeout" value="${http.connectionRequestTimeout}" />
+        <property name="connectionRequestTimeout" value="${http.connectionRequestTimeout}"/>
         <!--数据传输的最长时间 -->
-        <property name="socketTimeout" value="${http.socketTimeout}" />
+        <property name="socketTimeout" value="${http.socketTimeout}"/>
         <!-- 提交请求前测试连接是否可用 -->
         <!-- <property name="staleConnectionCheckEnabled" value="${http.staleConnectionCheckEnabled}"
             /> -->
@@ -67,12 +65,12 @@
     <!--定期清理无效连接 -->
     <bean class="org.apache.http.impl.client.IdleConnectionEvictor"
           destroy-method="shutdown">
-        <constructor-arg index="0" ref="connectionManager" />
-        <constructor-arg index="1" value="${http.maxIdleTime}" />
-        <constructor-arg index="2" value="MINUTES" />
+        <constructor-arg index="0" ref="connectionManager"/>
+        <constructor-arg index="1" value="${http.maxIdleTime}"/>
+        <constructor-arg index="2" value="MINUTES"/>
     </bean>
 
 
     <!-- 配置扫描 springmvc 的 service 的包 -->
-    <context:component-scan base-package="com.sumnear.service.spring" />
+    <context:component-scan base-package="com.sumnear.service.spring"/>
 </beans>
